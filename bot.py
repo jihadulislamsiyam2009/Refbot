@@ -83,37 +83,37 @@ async def check_member_status(context: ContextTypes.DEFAULT_TYPE, user_id: int) 
     return False
 
 def get_main_keyboard():
-    """Get main menu keyboard with colored buttons"""
+    """Get main menu keyboard with styled buttons"""
     keyboard = [
-        [InlineKeyboardButton("🎁 Daily Bonus", callback_data="daily")],
-        [InlineKeyboardButton("🎰 Spin", callback_data="spin"),
-         InlineKeyboardButton("💰 Balance", callback_data="balance")],
-        [InlineKeyboardButton("🔗 Referral", callback_data="referral"),
-         InlineKeyboardButton("💸 Withdraw", callback_data="withdraw")],
-        [InlineKeyboardButton("📜 History", callback_data="history"),
-         InlineKeyboardButton("🏆 Top Users", callback_data="leaderboard")],
-        [InlineKeyboardButton("📊 My Stats", callback_data="mystats")]
+        [InlineKeyboardButton("🟢 🎁 Daily Bonus", callback_data="daily")],
+        [InlineKeyboardButton("🔵 🎰 Spin", callback_data="spin"),
+         InlineKeyboardButton("🟡 💰 Balance", callback_data="balance")],
+        [InlineKeyboardButton("🟣 🔗 Referral", callback_data="referral"),
+         InlineKeyboardButton("🔴 💸 Withdraw", callback_data="withdraw")],
+        [InlineKeyboardButton("⚪ 📜 History", callback_data="history"),
+         InlineKeyboardButton("🟠 🏆 Top Users", callback_data="leaderboard")],
+        [InlineKeyboardButton("⚫ 📊 My Stats", callback_data="mystats")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
 def get_join_keyboard():
-    """Get force join keyboard with improved design"""
+    """Get force join keyboard with styled buttons"""
     keyboard = [
-        [InlineKeyboardButton("📢 Join Channel", url=f"https://t.me/{config.FORCE_JOIN_CHANNEL}")],
-        [InlineKeyboardButton("✅ Verify Membership", callback_data="check_join")]
+        [InlineKeyboardButton("🔴 📢 Join Channel", url=f"https://t.me/{config.FORCE_JOIN_CHANNEL}")],
+        [InlineKeyboardButton("🟢 ✅ Verify Membership", callback_data="check_join")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
 def get_admin_keyboard():
-    """Get admin panel keyboard with improved design"""
+    """Get admin panel keyboard with styled buttons"""
     keyboard = [
-        [InlineKeyboardButton("📊 Statistics", callback_data="admin_stats")],
-        [InlineKeyboardButton("👥 All Users", callback_data="admin_users"),
-         InlineKeyboardButton("🔍 Search", callback_data="admin_search")],
-        [InlineKeyboardButton("💰 Pending Withdrawals", callback_data="admin_withdraws")],
-        [InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast"),
-         InlineKeyboardButton("💵 Add Balance", callback_data="admin_balance")],
-        [InlineKeyboardButton("🔄 Reset Daily", callback_data="admin_reset")]
+        [InlineKeyboardButton("🟡 📊 Statistics", callback_data="admin_stats")],
+        [InlineKeyboardButton("🔵 👥 All Users", callback_data="admin_users"),
+         InlineKeyboardButton("🔵 🔍 Search", callback_data="admin_search")],
+        [InlineKeyboardButton("🔴 💰 Pending Withdrawals", callback_data="admin_withdraws")],
+        [InlineKeyboardButton("🟣 📢 Broadcast", callback_data="admin_broadcast"),
+         InlineKeyboardButton("🟢 💵 Add Balance", callback_data="admin_balance")],
+        [InlineKeyboardButton("⚫ 🔄 Reset Daily", callback_data="admin_reset")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -683,6 +683,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         next_level = db_user['level'] + 1
         next_threshold = LEVEL_THRESHOLDS.get(next_level, 999)
         refs_needed = next_threshold - db_user['referral_count']
+        withdraw_status = "✅ Available" if db_user['withdraw_unlocked'] else f"🔒 Need {5 - db_user['referral_count']} refs"
         
         text = f"""
 📊 **Your Statistics**
@@ -705,10 +706,66 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📈 **Progress:**
 ├ Level: {db_user['level']}/6
 ├ Next Level: {next_level} ({refs_needed} more refs needed)
-└ Withdraw Status: {'✅ Available' if db_user['withdraw_unlocked'] else f'🔒 Need {5 - db_user[\"referral_count\"]} refs'}
+└ Withdraw Status: {withdraw_status}
+"""
+        refs_needed_for_withdraw = 5 - db_user['referral_count']
+        withdraw_status = f"✅ Available" if db_user['withdraw_unlocked'] else f"🔒 Need {refs_needed_for_withdraw} refs"
+        text = f"""
+📊 **Your Statistics**
+
+👤 **Profile:**
+├ ID: `{user_id}`
+├ Level: {level_name}
+└ Joined: {db_user['created_at'][:10] if db_user['created_at'] else 'N/A'}
+
+💰 **Finance:**
+├ Balance: ${db_user['balance']:.2f} USDT
+├ Total Earned: ${db_user['total_earned']:.2f} USDT
+└ Spins Today: {db_user['spin_attempts']}/3
+
+👥 **Referrals:**
+├ Total: {db_user['referral_count']}
+├ Today: {db_user['today_referrals']}
+└ Unlock Status: {'✅ Unlocked' if db_user['withdraw_unlocked'] else '🔒 Locked'}
+
+📈 **Progress:**
+├ Level: {db_user['level']}/6
+├ Next Level: {next_level} ({refs_needed} more refs needed)
+└ Withdraw Status: {withdraw_status}
 """
         keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="back_main")]]
         await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
+    # Handle help
+    if data == "help":
+        help_text = f"""
+📚 **Bot Help**
+
+**How to Earn:**
+1. Share your referral link with friends
+2. Earn ${config.REFERRAL_BONUS:.2f} USDT per referral
+3. Refer {config.MIN_REFERRALS_TO_UNLOCK} friends to unlock withdrawals
+4. Minimum withdraw: ${config.MIN_WITHDRAW_AMOUNT:.2f} USDT
+
+**Features:**
+• 🎁 Daily Bonus: ${config.DAILY_BONUS:.2f} USDT/day
+• 🎰 Spin Wheel: Win up to ${config.SPIN_MAX_BONUS:.2f} USDT
+• 🏆 Level System: Earn level bonuses
+• 📊 Leaderboard: Top referrers
+
+**Commands:**
+/start - Start bot
+/balance - Check balance
+/referral - Get referral link
+/withdraw - Request withdrawal
+/daily - Claim daily bonus
+/spin - Spin wheel
+/leaderboard - Top referrers
+/stats - Your statistics
+        """
+        keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="back_main")]]
+        await query.edit_message_text(help_text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
     # Handle cancel
