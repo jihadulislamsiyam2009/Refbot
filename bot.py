@@ -41,7 +41,8 @@ def is_admin(user_id: int) -> bool:
 
 async def check_member_status(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> bool:
     """Check if user is member of required channel/group"""
-    for chat_id in [config.FORCE_JOIN_CHAT_ID, f"@{config.FORCE_JOIN_CHANNEL}", config.FORCE_JOIN_CHANNEL]:
+    # Check both ID and Username to be sure
+    for chat_id in [config.FORCE_JOIN_CHAT_ID, f"@{config.FORCE_JOIN_CHANNEL}"]:
         try:
             member = await context.bot.get_chat_member(chat_id=chat_id, user_id=user_id)
             if member.status in [
@@ -97,6 +98,21 @@ def get_spin_result():
     amounts = [0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10]
     weights = [20, 18, 15, 12, 10, 8, 6, 5, 4, 2]  # Higher weights for smaller amounts
     return random.choices(amounts, weights=weights)[0]
+
+def force_join_required(func):
+    """Decorator to enforce channel membership"""
+    from functools import wraps
+    @wraps(func)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        user_id = update.effective_user.id
+        if not await check_member_status(context, user_id):
+            await update.effective_message.reply_text(
+                config.NOT_JOINED_MESSAGE.format(channel=config.FORCE_JOIN_CHANNEL),
+                reply_markup=get_join_keyboard()
+            )
+            return
+        return await func(update, context, *args, **kwargs)
+    return wrapper
 
 # ==================== COMMAND HANDLERS ====================
 
@@ -160,6 +176,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=get_main_keyboard()
     )
 
+@force_join_required
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /help command"""
     help_text = f"""
@@ -192,6 +209,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 """
     await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
 
+@force_join_required
 async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /balance command"""
     user_id = update.effective_user.id
@@ -218,6 +236,7 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 """
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
 
+@force_join_required
 async def referral_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /referral command"""
     user_id = update.effective_user.id
@@ -244,6 +263,7 @@ async def referral_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 """
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
 
+@force_join_required
 async def withdraw_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /withdraw command"""
     user_id = update.effective_user.id
@@ -284,6 +304,7 @@ async def withdraw_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
+@force_join_required
 async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /history command"""
     user_id = update.effective_user.id
@@ -305,6 +326,7 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text += f"\n📊 Total Withdrawn: ${total:.2f} USDT"
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
 
+@force_join_required
 async def daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /daily command - claim daily bonus"""
     user_id = update.effective_user.id
@@ -333,6 +355,7 @@ async def daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=get_main_keyboard()
     )
 
+@force_join_required
 async def spin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /spin command - spin wheel"""
     user_id = update.effective_user.id
@@ -370,6 +393,7 @@ async def spin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
 
+@force_join_required
 async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /leaderboard command"""
     top_users = await get_top_referrers(10)
@@ -385,6 +409,7 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     text += "\nKeep referring to climb the leaderboard!"
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
 
+@force_join_required
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /stats command"""
     user_id = update.effective_user.id
@@ -429,19 +454,15 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle button callbacks"""
     query = update.callback_query
-    await query.answer()
+    # Note: query.answer() is called later after specific logic if needed
+    # but usually we answer quickly to stop loading state
 
     user_id = query.from_user.id
     data = query.data
 
-    # Check if user is banned
-    db_user = await get_user(user_id)
-    if db_user and db_user['is_banned']:
-        await query.edit_message_text("⛔ You are banned from this bot!")
-        return
-    
-    # Handle check join first (doesn't require db_user)
+    # Handle check join first (doesn't require membership check before verification)
     if data == "check_join":
+        await query.answer()
         is_member = await check_member_status(context, user_id)
         if is_member:
             # Get referrer ID if stored
@@ -462,6 +483,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             db_user = await get_user(user_id)
             if not db_user:
                 db_user = {'balance': 0, 'referral_count': 0, 'withdraw_unlocked': 0, 'level': 1, 'today_referrals': 0, 'total_earned': 0}
+
+            await query.answer("✅ Verification successful! Welcome.", show_alert=True)
             await query.edit_message_text(
                 config.WELCOME_MESSAGE.format(
                     bot_name=config.BOT_NAME,
@@ -475,10 +498,24 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=get_main_keyboard()
             )
         else:
-            await query.edit_message_text(
-                config.NOT_JOINED_MESSAGE.format(channel=config.FORCE_JOIN_CHANNEL),
-                reply_markup=get_join_keyboard()
-            )
+            await query.answer("⚠️ You still haven't joined the channel!", show_alert=True)
+        return
+
+    # For all other callbacks, check membership
+    if not await check_member_status(context, user_id):
+        await query.answer()
+        await query.edit_message_text(
+            config.NOT_JOINED_MESSAGE.format(channel=config.FORCE_JOIN_CHANNEL),
+            reply_markup=get_join_keyboard()
+        )
+        return
+
+    await query.answer()
+
+    # Check if user is banned
+    db_user = await get_user(user_id)
+    if db_user and db_user['is_banned']:
+        await query.edit_message_text("⛔ You are banned from this bot!")
         return
 
     # Ensure db_user exists for other handlers
@@ -950,6 +987,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle text messages"""
     user_id = update.effective_user.id
+
+    # Check membership for all text messages
+    if not await check_member_status(context, user_id):
+        await update.message.reply_text(
+            config.NOT_JOINED_MESSAGE.format(channel=config.FORCE_JOIN_CHANNEL),
+            reply_markup=get_join_keyboard()
+        )
+        return
 
     if user_id not in user_data:
         return
