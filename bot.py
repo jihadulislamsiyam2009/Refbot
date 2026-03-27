@@ -32,33 +32,6 @@ WAITING_SET_AMOUNT = 5
 # Store temporary data
 user_data = {}
 
-# Level names mapping
-LEVEL_NAMES = {
-    1: "🥉 Beginner",
-    2: "🥉 Bronze",
-    3: "🥈 Silver",
-    4: "🥇 Gold",
-    5: "💎 Platinum",
-    6: "👑 Diamond"
-}
-
-LEVEL_BONUSES = {
-    1: 0.00,
-    2: 0.05,
-    3: 0.10,
-    4: 0.20,
-    5: 0.50,
-    6: 1.00
-}
-
-LEVEL_THRESHOLDS = {
-    1: 0,
-    2: 5,
-    3: 20,
-    4: 50,
-    5: 100,
-    6: 250
-}
 
 # ==================== HELPER FUNCTIONS ====================
 
@@ -68,7 +41,8 @@ def is_admin(user_id: int) -> bool:
 
 async def check_member_status(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> bool:
     """Check if user is member of required channel/group"""
-    for chat_id in [config.FORCE_JOIN_CHAT_ID, f"@{config.FORCE_JOIN_CHANNEL}", config.FORCE_JOIN_CHANNEL]:
+    # Check both ID and Username to be sure
+    for chat_id in [config.FORCE_JOIN_CHAT_ID, f"@{config.FORCE_JOIN_CHANNEL}"]:
         try:
             member = await context.bot.get_chat_member(chat_id=chat_id, user_id=user_id)
             if member.status in [
@@ -78,7 +52,8 @@ async def check_member_status(context: ContextTypes.DEFAULT_TYPE, user_id: int) 
                 ChatMemberStatus.RESTRICTED
             ]:
                 return True
-        except:
+        except Exception as e:
+            logger.debug(f"Error checking member status for {chat_id}: {e}")
             continue
     return False
 
@@ -124,6 +99,21 @@ def get_spin_result():
     weights = [20, 18, 15, 12, 10, 8, 6, 5, 4, 2]  # Higher weights for smaller amounts
     return random.choices(amounts, weights=weights)[0]
 
+def force_join_required(func):
+    """Decorator to enforce channel membership"""
+    from functools import wraps
+    @wraps(func)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        user_id = update.effective_user.id
+        if not await check_member_status(context, user_id):
+            await update.effective_message.reply_text(
+                config.NOT_JOINED_MESSAGE.format(channel=config.FORCE_JOIN_CHANNEL),
+                reply_markup=get_join_keyboard()
+            )
+            return
+        return await func(update, context, *args, **kwargs)
+    return wrapper
+
 # ==================== COMMAND HANDLERS ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -153,6 +143,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             referrer_id = int(context.args[0].replace('ref_', ''))
             if referrer_id == user_id:
                 referrer_id = None
+            else:
+                # Store in user_data for when they join the channel
+                context.user_data['referrer_id'] = referrer_id
         except ValueError:
             referrer_id = None
 
@@ -183,6 +176,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=get_main_keyboard()
     )
 
+@force_join_required
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /help command"""
     help_text = f"""
@@ -215,6 +209,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 """
     await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
 
+@force_join_required
 async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /balance command"""
     user_id = update.effective_user.id
@@ -232,7 +227,7 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 📊 **Statistics:**
 ├ 👥 Total Referrals: {db_user['referral_count']}
-├ 🏆 Level: {LEVEL_NAMES.get(db_user['level'], 'Beginner')}
+├ 🏆 Level: {config.LEVEL_NAMES.get(db_user['level'], 'Beginner')}
 ├ 📅 Today's Referrals: {db_user['today_referrals']}
 └ 📊 Total Earned: ${db_user['total_earned']:.2f} USDT
 
@@ -241,6 +236,7 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 """
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
 
+@force_join_required
 async def referral_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /referral command"""
     user_id = update.effective_user.id
@@ -260,13 +256,14 @@ async def referral_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📊 **Your Stats:**
 ├ 📈 Referrals: {db_user['referral_count']}/{config.MIN_REFERRALS_TO_UNLOCK}
 ├ 💰 Balance: ${db_user['balance']:.2f} USDT
-├ 🏆 Level: {LEVEL_NAMES.get(db_user['level'], 'Beginner')}
+├ 🏆 Level: {config.LEVEL_NAMES.get(db_user['level'], 'Beginner')}
 └ 📅 Today: {db_user['today_referrals']} referrals
 
 💡 Share this link and earn ${config.REFERRAL_BONUS} per referral!
 """
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
 
+@force_join_required
 async def withdraw_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /withdraw command"""
     user_id = update.effective_user.id
@@ -307,6 +304,7 @@ async def withdraw_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
+@force_join_required
 async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /history command"""
     user_id = update.effective_user.id
@@ -328,6 +326,7 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text += f"\n📊 Total Withdrawn: ${total:.2f} USDT"
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
 
+@force_join_required
 async def daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /daily command - claim daily bonus"""
     user_id = update.effective_user.id
@@ -356,6 +355,7 @@ async def daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=get_main_keyboard()
     )
 
+@force_join_required
 async def spin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /spin command - spin wheel"""
     user_id = update.effective_user.id
@@ -377,24 +377,23 @@ async def spin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result = get_spin_result()
     await use_spin(user_id)
     await add_spin_bonus(user_id, result)
-    db_user = await get_user(user_id)
 
     # Check for level up
-    new_level = get_level_from_refs(db_user['referral_count'])
-    level_bonus = 0
-    if new_level > db_user['level']:
-        level_bonus = LEVEL_BONUSES.get(new_level, 0)
-        await update_user_balance(user_id, level_bonus, f"Level up bonus - {LEVEL_NAMES[new_level]}")
+    from database import update_user_level
+    lvl_up = await update_user_level(user_id)
+
+    db_user = await get_user(user_id)
 
     keyboard = [[InlineKeyboardButton("🎰 Spin Again", callback_data="spin")]]
     keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="back_main")])
 
-    text = f"🎰 **Spin Result**\n\n🎁 You won: ${result:.2f} USDT!\n🎯 Attempts left: {db_user['spin_attempts'] - 1}"
-    if level_bonus > 0:
-        text += f"\n\n🎉 **Level Up!** {LEVEL_NAMES[new_level]}\n💎 Bonus: ${level_bonus:.2f} USDT"
+    text = f"🎰 **Spin Result**\n\n🎁 You won: ${result:.2f} USDT!\n🎯 Attempts left: {db_user['spin_attempts']}"
+    if lvl_up:
+        text += f"\n\n🎉 **Level Up!** {lvl_up['level_name']}\n💎 Bonus: ${lvl_up['bonus']:.2f} USDT"
 
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
 
+@force_join_required
 async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /leaderboard command"""
     top_users = await get_top_referrers(10)
@@ -410,6 +409,7 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     text += "\nKeep referring to climb the leaderboard!"
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
 
+@force_join_required
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /stats command"""
     user_id = update.effective_user.id
@@ -419,9 +419,9 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Please use /start first!")
         return
 
-    level_name = LEVEL_NAMES.get(db_user['level'], 'Beginner')
+    level_name = config.LEVEL_NAMES.get(db_user['level'], 'Beginner')
     next_level = db_user['level'] + 1
-    next_threshold = LEVEL_THRESHOLDS.get(next_level, 999)
+    next_threshold = config.LEVEL_THRESHOLDS.get(next_level, 999)
     refs_needed = next_threshold - db_user['referral_count']
 
     text = f"""
@@ -454,30 +454,37 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle button callbacks"""
     query = update.callback_query
-    await query.answer()
+    # Note: query.answer() is called later after specific logic if needed
+    # but usually we answer quickly to stop loading state
 
     user_id = query.from_user.id
     data = query.data
 
-    # Check if user is banned
-    db_user = await get_user(user_id)
-    if db_user and db_user['is_banned']:
-        await query.edit_message_text("⛔ You are banned from this bot!")
-        return
-    
-    # Handle check join first (doesn't require db_user)
+    # Handle check join first (doesn't require membership check before verification)
     if data == "check_join":
+        await query.answer()
         is_member = await check_member_status(context, user_id)
         if is_member:
+            # Get referrer ID if stored
+            referrer_id = context.user_data.get('referrer_id')
+
             await add_user(
                 user_id=user_id,
                 username=query.from_user.username,
                 first_name=query.from_user.first_name,
-                last_name=query.from_user.last_name
+                last_name=query.from_user.last_name,
+                referred_by=referrer_id
             )
+
+            # Clear referrer ID after use
+            if 'referrer_id' in context.user_data:
+                del context.user_data['referrer_id']
+
             db_user = await get_user(user_id)
             if not db_user:
                 db_user = {'balance': 0, 'referral_count': 0, 'withdraw_unlocked': 0, 'level': 1, 'today_referrals': 0, 'total_earned': 0}
+
+            await query.answer("✅ Verification successful! Welcome.", show_alert=True)
             await query.edit_message_text(
                 config.WELCOME_MESSAGE.format(
                     bot_name=config.BOT_NAME,
@@ -491,10 +498,24 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=get_main_keyboard()
             )
         else:
-            await query.edit_message_text(
-                config.NOT_JOINED_MESSAGE.format(channel=config.FORCE_JOIN_CHANNEL),
-                reply_markup=get_join_keyboard()
-            )
+            await query.answer("⚠️ You still haven't joined the channel!", show_alert=True)
+        return
+
+    # For all other callbacks, check membership
+    if not await check_member_status(context, user_id):
+        await query.answer()
+        await query.edit_message_text(
+            config.NOT_JOINED_MESSAGE.format(channel=config.FORCE_JOIN_CHANNEL),
+            reply_markup=get_join_keyboard()
+        )
+        return
+
+    await query.answer()
+
+    # Check if user is banned
+    db_user = await get_user(user_id)
+    if db_user and db_user['is_banned']:
+        await query.edit_message_text("⛔ You are banned from this bot!")
         return
 
     # Ensure db_user exists for other handlers
@@ -523,7 +544,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"`{referral_link}`\n\n"
             f"📊 Referrals: {db_user['referral_count']}/{config.MIN_REFERRALS_TO_UNLOCK}\n"
             f"💰 Balance: ${db_user['balance']:.2f} USDT\n"
-            f"🏆 Level: {LEVEL_NAMES.get(db_user['level'], 'Beginner')}\n"
+            f"🏆 Level: {config.LEVEL_NAMES.get(db_user['level'], 'Beginner')}\n"
             f"📈 Status: {status}\n\n"
             f"👆 Click the link above to copy!",
             parse_mode=ParseMode.MARKDOWN,
@@ -546,7 +567,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             f"💼 **Balance: ${db_user['balance']:.2f} USDT**\n\n"
             f"👥 Referrals: {db_user['referral_count']}\n"
-            f"🏆 Level: {LEVEL_NAMES.get(db_user['level'], 'Beginner')}\n"
+            f"🏆 Level: {config.LEVEL_NAMES.get(db_user['level'], 'Beginner')}\n"
             f"📊 Total Earned: ${db_user['total_earned']:.2f} USDT\n\n{status}{unlock_msg}",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=get_main_keyboard()
@@ -644,18 +665,24 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         result = get_spin_result()
         await use_spin(user_id)
         await add_spin_bonus(user_id, result)
+
+        # Check for level up
+        from database import update_user_level
+        lvl_up = await update_user_level(user_id)
+
         db_user = await get_user(user_id)
 
         keyboard = [[InlineKeyboardButton("🎰 Spin Again", callback_data="spin")]]
         keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="back_main")])
 
-        await query.edit_message_text(
-            f"🎰 **Spin Result**\n\n🎁 You won: ${result:.2f} USDT!\n"
-            f"📊 New Balance: ${db_user['balance']:.2f} USDT\n"
-            f"🎯 Attempts left: {db_user['spin_attempts']}",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        text = f"🎰 **Spin Result**\n\n🎁 You won: ${result:.2f} USDT!\n" \
+               f"📊 New Balance: ${db_user['balance']:.2f} USDT\n" \
+               f"🎯 Attempts left: {db_user['spin_attempts']}"
+
+        if lvl_up:
+            text += f"\n\n🎉 **Level Up!** {lvl_up['level_name']}\n💎 Bonus: ${lvl_up['bonus']:.2f} USDT"
+
+        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
     # Handle leaderboard
@@ -679,9 +706,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("⚠️ Please use /start first!", reply_markup=get_main_keyboard())
             return
         
-        level_name = LEVEL_NAMES.get(db_user['level'], 'Beginner')
+        level_name = config.LEVEL_NAMES.get(db_user['level'], 'Beginner')
         next_level = db_user['level'] + 1
-        next_threshold = LEVEL_THRESHOLDS.get(next_level, 999)
+        next_threshold = config.LEVEL_THRESHOLDS.get(next_level, 999)
         refs_needed = next_threshold - db_user['referral_count']
         withdraw_status = "✅ Available" if db_user['withdraw_unlocked'] else f"🔒 Need {5 - db_user['referral_count']} refs"
         
@@ -787,8 +814,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 total_users=stats['total_users'],
                 pending_withdrawals=stats['pending_withdrawals'],
                 total_paid=stats['total_paid'],
-                today_spins=0,
-                today_bonuses=0.0
+                today_spins=stats['today_spins'],
+                today_bonuses=stats['today_bonuses']
             ),
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=get_admin_keyboard()
@@ -852,8 +879,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"✅ **Withdrawal Approved!**\n\n💵 Amount: ${w['amount']:.2f} USDT\n💼 Wallet: `{w['wallet_address']}`",
                 parse_mode=ParseMode.MARKDOWN
             )
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"Error sending approval notification to {w['user_id']}: {e}")
 
         await query.edit_message_text(
             f"✅ Withdrawal #{w_id} approved!",
@@ -875,8 +902,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"❌ **Withdrawal Rejected**\n\n💵 Amount: ${w['amount']:.2f} USDT\n💰 Balance refunded!",
                 parse_mode=ParseMode.MARKDOWN
             )
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"Error sending rejection notification to {w['user_id']}: {e}")
 
         await query.edit_message_text(
             f"❌ Withdrawal #{w_id} rejected and balance refunded!",
@@ -900,11 +927,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 💰 **Finance:**
 ├ Total Balance: ${stats['total_balance']:.2f} USDT
 ├ Total Earned: ${stats['total_earned']:.2f} USDT
-├ Pending: ${stats['pending_withdrawals']} requests
-└ Paid Out: ${stats['total_paid']:.2f} USDT
+├ Pending: {stats['pending_withdrawals']} requests
+├ Paid Out: ${stats['total_paid']:.2f} USDT
+└ Today's Bonuses: ${stats['today_bonuses']:.2f} USDT
 
 📈 **Referrals:**
-└ Total: {stats['total_referrals']}
+├ Total: {stats['total_referrals']}
+└ Today's Spins: {stats['today_spins']}
 """
         keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="admin_panel")]]
         await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
@@ -959,6 +988,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle text messages"""
     user_id = update.effective_user.id
 
+    # Check membership for all text messages
+    if not await check_member_status(context, user_id):
+        await update.message.reply_text(
+            config.NOT_JOINED_MESSAGE.format(channel=config.FORCE_JOIN_CHANNEL),
+            reply_markup=get_join_keyboard()
+        )
+        return
+
     if user_id not in user_data:
         return
 
@@ -968,6 +1005,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Handle wallet address input
     if state == WAITING_WALLET:
         wallet = message_text.strip()
+
+        from utils.helpers import is_valid_wallet
+        if not is_valid_wallet(wallet):
+            await update.message.reply_text(
+                "❌ **Invalid Wallet Address!**\n\n"
+                "Please enter a valid USDT (TRC20 or ERC20) address.\n"
+                "• TRC20: Starts with 'T'\n"
+                "• ERC20: Starts with '0x'",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel")]])
+            )
+            return
+
         balance = user_data[user_id]['balance']
 
         await set_wallet_address(user_id, wallet)
@@ -985,8 +1035,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"Wallet: `{wallet}`",
                 parse_mode=ParseMode.MARKDOWN
             )
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"Error notifying admin of withdrawal: {e}")
 
         await update.message.reply_text(
             f"✅ **Withdrawal Request Submitted!**\n\n"
@@ -1010,8 +1060,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await context.bot.send_message(u['user_id'], f"📢 **Broadcast:**\n\n{message_text}", parse_mode=ParseMode.MARKDOWN)
                 success += 1
-            except:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to send broadcast to {u['user_id']}: {e}")
 
         del user_data[user_id]
         await update.message.reply_text(f"📢 Broadcast sent to {success}/{len(users)} users!")
@@ -1035,13 +1085,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"💰 **Balance Updated!**\n\n💵 Added: ${amount:.2f} USDT",
                     parse_mode=ParseMode.MARKDOWN
                 )
-            except:
-                pass
+            except Exception as e:
+                logger.warning(f"Could not notify user {target_id} of balance update: {e}")
 
             del user_data[user_id]
             await update.message.reply_text(f"✅ Added ${amount:.2f} to user {target_id}!")
-        except:
-            await update.message.reply_text("❌ Invalid format! Use: `user_id amount`", parse_mode=ParseMode.MARKDOWN)
+        except ValueError:
+            await update.message.reply_text("❌ Invalid format! Use: `user_id amount` (e.g., `12345 10.5`)", parse_mode=ParseMode.MARKDOWN)
+        except Exception as e:
+            logger.error(f"Error in WAITING_ADD_BALANCE: {e}")
+            await update.message.reply_text(f"❌ Error: {e}")
         return
 
     # Handle search
@@ -1081,8 +1134,8 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             total_users=stats['total_users'],
             pending_withdrawals=stats['pending_withdrawals'],
             total_paid=stats['total_paid'],
-            today_spins=0,
-            today_bonuses=0.0
+            today_spins=stats['today_spins'],
+            today_bonuses=stats['today_bonuses']
         ),
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=get_admin_keyboard()
@@ -1104,8 +1157,11 @@ async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_id = int(context.args[0])
         await ban_user(target_id, True)
         await update.message.reply_text(f"✅ User {target_id} has been banned!")
-    except:
-        await update.message.reply_text("❌ Invalid user ID!")
+    except (ValueError, IndexError):
+        await update.message.reply_text("❌ Invalid format! Usage: /ban user_id")
+    except Exception as e:
+        logger.error(f"Error banning user: {e}")
+        await update.message.reply_text(f"❌ Error: {e}")
 
 async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /unban command"""
@@ -1123,8 +1179,11 @@ async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_id = int(context.args[0])
         await ban_user(target_id, False)
         await update.message.reply_text(f"✅ User {target_id} has been unbanned!")
-    except:
-        await update.message.reply_text("❌ Invalid user ID!")
+    except (ValueError, IndexError):
+        await update.message.reply_text("❌ Invalid format! Usage: /unban user_id")
+    except Exception as e:
+        logger.error(f"Error unbanning user: {e}")
+        await update.message.reply_text(f"❌ Error: {e}")
 
 # ==================== ERROR HANDLER ====================
 
